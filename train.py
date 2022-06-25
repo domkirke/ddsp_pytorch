@@ -1,4 +1,4 @@
-import torch
+import torch, os
 from torch.utils.tensorboard import SummaryWriter
 import yaml
 from ddsp.model import DDSP
@@ -11,7 +11,7 @@ import soundfile as sf
 from einops import rearrange
 from ddsp.utils import get_scheduler
 import numpy as np
-
+import pdb
 
 class args(Config):
     CONFIG = "config.yaml"
@@ -22,16 +22,23 @@ class args(Config):
     START_LR = 1e-3
     STOP_LR = 1e-4
     DECAY_OVER = 400000
+    CHECKPOINT=None
 
 
 args.parse_args()
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 with open(args.CONFIG, "r") as config:
     config = yaml.safe_load(config)
-
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-model = DDSP(**config["model"]).to(device)
+if args.CHECKPOINT is not None:
+    assert os.path.exists(args.CHECKPOINT), "%s not found"%args.CHECKPOINT
+    loaded_data = torch.load(args.CHECKPOINT, map_location="cpu")
+    with open(f"{os.path.dirname(args.CHECKPOINT)}/config.yaml", "r") as imported_config:
+        imported_config = yaml.safe_load(imported_config)
+    model = DDSP(**imported_config['model']).to(device)
+    model.load_state_dict(loaded_data)
+else:
+    model = DDSP(**config["model"]).to(device)
 
 dataset = Dataset(config["preprocess"]["out_dir"])
 
@@ -95,6 +102,9 @@ for e in tqdm(range(epochs)):
             log_loss = (safe_log(s_x) - safe_log(s_y)).abs().mean()
             loss = loss + lin_loss + log_loss
 
+        if torch.isnan(loss):
+            pdb.set_trace()
+
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -111,12 +121,6 @@ for e in tqdm(range(epochs)):
         writer.add_scalar("reverb_decay", model.reverb.decay.item(), e)
         writer.add_scalar("reverb_wet", model.reverb.wet.item(), e)
         # scheduler.step()
-        if mean_loss < best_loss:
-            best_loss = mean_loss
-            torch.save(
-                model.state_dict(),
-                path.join(args.ROOT, args.NAME, "state.pth"),
-            )
 
         mean_loss = 0
         n_element = 0
@@ -127,4 +131,17 @@ for e in tqdm(range(epochs)):
             path.join(args.ROOT, args.NAME, f"eval_{e:06d}.wav"),
             audio,
             config["preprocess"]["sampling_rate"],
+        )
+
+    if not e % 100:
+        torch.save(
+            model.state_dict(),
+            path.join(args.ROOT, args.NAME, f"state_{e}.pth"),
+        )
+    
+    if mean_loss < best_loss:
+        best_loss = mean_loss
+        torch.save(
+            model.state_dict(),
+            path.join(args.ROOT, args.NAME, f"state_best.pth"),
         )

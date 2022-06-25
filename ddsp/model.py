@@ -46,7 +46,7 @@ class DDSP(nn.Module):
 
         self.in_mlps = nn.ModuleList([mlp(1, hidden_size, 3)] * 2)
         self.gru = gru(2, hidden_size)
-        self.out_mlp = mlp(hidden_size + 2, hidden_size, 3)
+        self.out_mlp = mlp(3*hidden_size, hidden_size, 3)
 
         self.proj_matrices = nn.ModuleList([
             nn.Linear(hidden_size, n_harmonic + 1),
@@ -59,11 +59,18 @@ class DDSP(nn.Module):
         self.register_buffer("phase", torch.zeros(1))
 
     def forward(self, pitch, loudness):
-        hidden = torch.cat([
+        # hidden = torch.cat([
+        #     self.in_mlps[0](pitch),
+        #     self.in_mlps[1](loudness),
+        # ], -1)
+        # hidden = torch.cat([self.gru(hidden)[0], pitch, loudness], -1)
+        # hidden = self.out_mlp(hidden)
+
+        desc_embeddings = torch.cat([
             self.in_mlps[0](pitch),
             self.in_mlps[1](loudness),
         ], -1)
-        hidden = torch.cat([self.gru(hidden)[0], pitch, loudness], -1)
+        hidden = torch.cat([self.gru(desc_embeddings)[0], desc_embeddings], -1)
         hidden = self.out_mlp(hidden)
 
         # harmonic part
